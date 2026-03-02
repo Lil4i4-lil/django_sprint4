@@ -1,5 +1,7 @@
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count
 from django.http import Http404
@@ -51,11 +53,15 @@ class ProfileDetailView(ProfileMixin, DetailView):
         return context
 
 
-class ProfileUpdateView(ProfileMixin, UpdateView):
+class ProfileUpdateView(LoginRequiredMixin, ProfileMixin, UpdateView):
     template_name = 'blog/user.html'
     form_class = ProfileForm
 
     def get_success_url(self):
+        username = self.request.user.username
+        if not username:
+            return reverse_lazy('blog:index')
+
         return reverse_lazy('blog:profile', kwargs={'username': self.request.user.username})
 
 
@@ -73,7 +79,7 @@ class PostListView(ListView):
                     pub_date__lte=timezone.now(),
                     is_published=True,
                     category__is_published=True
-                ).order_by('-pub_date')[:5]
+                ).order_by('-pub_date')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -81,14 +87,14 @@ class PostListView(ListView):
         return context
 
 
-class PostCreateView(PostMixin, CreateView):
+class PostCreateView(LoginRequiredMixin, PostMixin, CreateView):
     template_name = 'blog/create.html'
 
     def get_success_url(self):
         return reverse_lazy('blog:profile', kwargs={'username': self.request.user.username})
 
     def form_valid(self, form):
-        form.instance.author = self.request.user
+        form.instance.author = get_user_model().objects.get(pk=self.request.user.pk)
         return super().form_valid(form)
 
     def get_form_kwargs(self):
@@ -105,24 +111,34 @@ class PostDeleteView(PostMixin, DeleteView):
     def get_success_url(self):
         return reverse_lazy('blog:profile', kwargs={'username': self.request.user.username})
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-
-        post = get_object_or_404(Post, pk=self.kwargs['post_id'])
-        form = PostForm(instance=post)
-
-        context['form'] = form
-        context['post'] = post
-
-        return context
+    def post(self, request, *args, **kwargs):
+        return self.delete(request, *args, **kwargs)
 
 
-class PostUpdateView(PostMixin, UpdateView):
+class PostUpdateView(LoginRequiredMixin, PostMixin, UpdateView):
     template_name = 'blog/create.html'
     pk_url_kwarg = 'post_id'
 
+    def handle_no_permission(self):
+        # Перенаправляем неавторизованных на страницу поста
+        obj = self.get_object()
+        post_id = obj.id
+        return redirect('blog:post_detail', post_id=post_id)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.object = self.get_object()
+
+        if not request.user.is_authenticated:
+            post_id = self.kwargs.get(self.pk_url_kwarg)
+            return redirect('blog:post_detail', post_id=post_id)
+
+        if self.object.author != request.user:
+            raise PermissionDenied("Вы не можете редактировать чужие посты")
+
+        return super().dispatch(request, *args, **kwargs)
+
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail', kwargs={'id': self.object.id})
+        return reverse_lazy('blog:post_detail', kwargs={'post_id': self.object.id})
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -134,7 +150,7 @@ class PostUpdateView(PostMixin, UpdateView):
 class PostDetailView(DetailView):
     model = Post
     template_name = 'blog/detail.html'
-    pk_url_kwarg = 'id'
+    pk_url_kwarg = 'post_id'
     context_object_name = 'post'
 
     def get_queryset(self):
@@ -197,7 +213,7 @@ def add_comment(request, post_id):
         comment.author = request.user
         comment.post = post
         comment.save()
-    return redirect('blog:post_detail', id=post_id)
+    return redirect('blog:post_detail', post_id=post_id)
 
 
 @login_required
@@ -212,7 +228,7 @@ def edit_comment(request, post_id, comment_id):
         form = CommentForm(request.POST, instance=comment)
         if form.is_valid():
             form.save()
-            return redirect('blog:post_detail', id=post_id)
+            return redirect('blog:post_detail', post_id=post_id)
     else:
         form = CommentForm(instance=comment)
 
@@ -234,14 +250,10 @@ def delete_comment(request, post_id, comment_id):
         raise Http404("Вы не можете редактировать этот комментарий")
 
     if request.method == 'POST':
-        form = CommentForm(request.POST, instance=comment)
         comment.delete()
-        return redirect('blog:post_detail', id=post_id)
-    else:
-        form = CommentForm(instance=comment)
+        return redirect('blog:post_detail', post_id=post_id)
 
     context = {
-        'form': form,
         'comment': comment,
         'post': post,
     }

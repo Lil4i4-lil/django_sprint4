@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.db import models
 
 
@@ -27,7 +27,7 @@ class Post(BaseModel):
                                               'дату и время в будущем — '
                                               'можно делать отложенные '
                                               'публикации.')
-    author = models.ForeignKey(User, on_delete=models.CASCADE, null=False,
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=False,
                                blank=False,
                                verbose_name='Автор публикации')
     location = models.ForeignKey('Location', on_delete=models.SET_NULL,
@@ -83,7 +83,7 @@ class Comment(models.Model):
     text = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='comments')
-    author = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
     class Meta:
         ordering = ('-created_at',)
